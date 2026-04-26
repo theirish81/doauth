@@ -1,0 +1,135 @@
+# doauth
+
+`doauth` is a robust Go library designed to simplify OAuth2 authentication by automating the discovery of authorization server metadata. It is built to handle modern, complex environments where endpoints might not be known upfront, or where resources point to their authorization servers via standard discovery protocols.
+
+## Key Features
+
+- **Greedy Discovery**: Automatically searches for metadata using OIDC (OpenID Connect), RFC 8414 (OAuth 2.0 Authorization Server Metadata), and RFC 9728 (Discovery of Protected Resource Metadata).
+- **Resource Probing**: Can probe a protected resource URL to find its authorization server via `WWW-Authenticate` headers or `X-Discovery-URL`.
+- **PKCE by Default**: Securely handles Proof Key for Code Exchange (S256) to protect against code injection attacks.
+- **Local Flow for CLIs**: Includes a built-in local web server to automatically capture authorization callbacks in CLI applications.
+- **Flexible Configuration**: Supports both automatic discovery and manual endpoint overrides.
+- **Customizable**: Allows passing a custom `http.Client` for all network operations (discovery, exchange, refresh).
+- **Stateless Exchange**: Designed to work across different application instances or process boundaries.
+
+## Installation
+
+```bash
+go get github.com/diaphora/doauth
+```
+
+## Quick Start (Standard Discovery)
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "github.com/diaphora/doauth"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // 1. Initialize the Authenticator
+    auth, _ := doauth.NewAuthenticator(doauth.Config{
+        BaseURL:      "https://api.example.com",
+        ClientID:     "your-client-id",
+        RedirectURL:  "http://localhost:8080/callback",
+    })
+
+    // 2. Discover endpoints (OIDC, RFC 8414, RFC 9728)
+    needed, _ := auth.Discover(ctx)
+    if !needed {
+        fmt.Println("No authentication required for this resource")
+        return
+    }
+
+    // 3. Generate the Authorization URL (PKCE is enabled by default)
+    url, state, verifier, _ := auth.GetAuthURL()
+    fmt.Printf("Visit this URL to authorize: %s\n", url)
+
+    // ... after getting the 'code' from your redirect handler ...
+    code := "received-auth-code"
+
+    // 4. Exchange the code for a token
+    token, _ := auth.Exchange(ctx, code, state, verifier)
+    fmt.Printf("Access Token: %s\n", token.AccessToken)
+}
+```
+
+## Advanced Discovery Logic
+
+`doauth` uses a "greedy" approach to find authorization metadata. When you call `Discover()`, it performs the following steps:
+
+1.  **Standard Well-Known Paths**: It checks the resource path and the host root for:
+    -   `/.well-known/openid-configuration`
+    -   `/.well-known/oauth-authorization-server`
+    -   `/.well-known/oauth-protected-resource`
+2.  **Greedy Fetch**: It attempts to fetch the `BaseURL` directly, as some servers serve metadata at the root of the API path.
+3.  **Probing**: If a resource returns `401 Unauthorized`, `doauth` parses the `WWW-Authenticate` header looking for `issuer` or `resource_metadata` (RFC 9728) to find the actual authorization server.
+4.  **Chain Resolution**: If the discovery points to a "Protected Resource Metadata" (RFC 9728), it follows the chain to the actual Authorization Server automatically.
+
+## Local Flow for CLI Applications
+
+If you are building a CLI tool, you can use the `LocalFlow` helper to automate the browser opening and callback capture:
+
+```go
+flow := doauth.NewLocalFlow(doauth.WithPort(8080))
+
+// Open the system browser
+_ = flow.OpenBrowser(authURL)
+
+// Block until the code is received at http://localhost:8080/callback
+result, _ := flow.WaitForCode(ctx)
+token, _ := auth.Exchange(ctx, result.Code, state, verifier)
+```
+
+## Manual Configuration
+
+If your environment doesn't support discovery, or you want to bypass it, you can provide endpoints manually:
+
+```go
+auth, _ := doauth.NewAuthenticator(doauth.Config{
+    ClientID:         "my-client",
+    RedirectURL:      "http://localhost/callback",
+    AuthorizationURL: "https://auth.example.com/authorize",
+    TokenURL:         "https://auth.example.com/token",
+})
+
+// Discover() will return immediately without network calls
+_, _ = auth.Discover(ctx)
+```
+
+## Custom HTTP Client
+
+Use the Options pattern to provide a custom client (e.g., for proxying, custom timeouts, or logging):
+
+```go
+myClient := &http.Client{Timeout: 30 * time.Second}
+auth, _ := doauth.NewAuthenticator(cfg, doauth.WithHTTPClient(myClient))
+```
+
+## PKCE Support
+
+PKCE is enabled by default for all generated URLs. You can toggle it or provide a custom state:
+
+```go
+url, state, verifier, _ := auth.GetAuthURL(
+    doauth.WithPKCE(true),
+    doauth.WithState("custom-secure-state"),
+)
+```
+
+## RFC Compliance
+
+- **OIDC Discovery**: Fully supported.
+- **RFC 8414**: OAuth 2.0 Authorization Server Metadata.
+- **RFC 9728**: Discovery of Protected Resource Metadata.
+- **RFC 7636**: PKCE (Proof Key for Code Exchange).
+- **RFC 6750**: Bearer Token usage via `AuthorizeRequest`.
+
+## License
+
+MIT
