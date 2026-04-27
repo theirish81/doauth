@@ -13,8 +13,8 @@ import (
 // Metadata contains the authorization server's metadata (RFC 8414 / RFC 9728).
 type Metadata struct {
 	Issuer               string   `json:"issuer,omitempty"`
-	AuthorizationURL     string   `json:"-"`
-	TokenURL             string   `json:"-"`
+	AuthorizationURL     string   `json:"authorization_url,omitempty"`
+	TokenURL             string   `json:"token_url,omitempty"`
 	JWKSURI              string   `json:"jwks_uri,omitempty"`
 	RegistrationEndpoint string   `json:"registration_endpoint,omitempty"`
 	ScopesSupported      []string `json:"scopes_supported,omitempty"`
@@ -25,6 +25,16 @@ type Metadata struct {
 	// Protected Resource Metadata (RFC 9728)
 	Resource             string   `json:"resource,omitempty"`
 	AuthorizationServers []string `json:"authorization_servers,omitempty"`
+}
+
+// MarshalBinary encodes the Metadata struct into JSON bytes.
+func (m *Metadata) MarshalBinary() ([]byte, error) {
+	return json.Marshal(m)
+}
+
+// UnmarshalBinary decodes JSON bytes back into the Metadata struct.
+func (m *Metadata) UnmarshalBinary(data []byte) error {
+	return json.Unmarshal(data, m)
 }
 
 // UnmarshalJSON implements custom decoding to handle standard and aliased endpoint names.
