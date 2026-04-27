@@ -124,7 +124,7 @@ func (a *Authenticator) Discover(ctx context.Context) (bool, error) {
 	meta, err := DiscoverMetadata(ctx, a.cfg.BaseURL, a.client, a.logger)
 	if err == nil {
 		a.logger.Debug("standard discovery successful")
-		a.applyMetadata(meta)
+		a.ApplyMetadata(meta)
 		return true, nil
 	}
 
@@ -138,7 +138,7 @@ func (a *Authenticator) Discover(ctx context.Context) (bool, error) {
 
 	if meta != nil && meta.AuthorizationURL != "" && meta.TokenURL != "" {
 		a.logger.Debug("probe discovery successful")
-		a.applyMetadata(meta)
+		a.ApplyMetadata(meta)
 		return true, nil
 	}
 
@@ -151,8 +151,8 @@ func (a *Authenticator) Discover(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// applyMetadata updates the internal oauth2.Config with endpoints and scopes from discovery.
-func (a *Authenticator) applyMetadata(meta *Metadata) {
+// ApplyMetadata updates the internal oauth2.Config with endpoints and scopes from discovery.
+func (a *Authenticator) ApplyMetadata(meta *Metadata) {
 	a.metadata = meta
 	a.oauth2Cfg.Endpoint = oauth2.Endpoint{
 		AuthURL:  meta.AuthorizationURL,
@@ -174,14 +174,22 @@ type AuthURLOption func(*authURLOptions)
 
 // authURLOptions holds internal settings for generating an authorization URL.
 type authURLOptions struct {
-	state   string
-	usePKCE bool
+	verifier string
+	state    string
+	usePKCE  bool
 }
 
 // WithState sets a custom state for the authorization URL.
 func WithState(state string) AuthURLOption {
 	return func(o *authURLOptions) {
 		o.state = state
+	}
+}
+
+// WithVerifier sets a custom code verifier for the authorization URL.
+func WithVerifier(verifier string) AuthURLOption {
+	return func(o *authURLOptions) {
+		o.verifier = verifier
 	}
 }
 
@@ -217,9 +225,12 @@ func (a *Authenticator) GetAuthURL(opts ...AuthURLOption) (string, string, strin
 	var oauthOpts []oauth2.AuthCodeOption
 	if options.usePKCE {
 		var err error
-		verifier, err = GenerateVerifier()
-		if err != nil {
-			return "", "", "", fmt.Errorf("failed to generate PKCE verifier: %w", err)
+		verifier = options.verifier
+		if verifier == "" {
+			verifier, err = GenerateVerifier()
+			if err != nil {
+				return "", "", "", fmt.Errorf("failed to generate PKCE verifier: %w", err)
+			}
 		}
 		oauthOpts = append(oauthOpts,
 			oauth2.SetAuthURLParam(ParamCodeChallenge, GenerateChallenge(verifier)),
