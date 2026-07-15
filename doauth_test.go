@@ -440,3 +440,122 @@ func TestAuthenticator_RefreshToken(t *testing.T) {
 	assert.True(t, called)
 	assert.Equal(t, "new-token", newToken.AccessToken)
 }
+
+func TestAuthenticator_CanUseClientCredentials(t *testing.T) {
+	// 1. Opt-in false
+	auth, err := NewAuthenticator(Config{
+		ClientID:     "client-id",
+		ClientSecret: "secret",
+		RedirectURL:  "http://localhost/callback",
+	})
+	require.NoError(t, err)
+	assert.False(t, auth.CanUseClientCredentials())
+
+	// 2. Opt-in true, but no ClientSecret
+	auth, err = NewAuthenticator(Config{
+		ClientID:               "client-id",
+		RedirectURL:            "http://localhost/callback",
+		AllowClientCredentials: true,
+	})
+	require.NoError(t, err)
+	assert.False(t, auth.CanUseClientCredentials())
+
+	// 3. Opt-in true, ClientSecret set, but metadata nil
+	auth, err = NewAuthenticator(Config{
+		ClientID:               "client-id",
+		ClientSecret:           "secret",
+		RedirectURL:            "http://localhost/callback",
+		AllowClientCredentials: true,
+	})
+	require.NoError(t, err)
+	assert.False(t, auth.CanUseClientCredentials())
+
+	// 4. Opt-in true, ClientSecret set, metadata has client_credentials
+	auth.metadata = &Metadata{
+		GrantTypes: []string{"authorization_code", "client_credentials"},
+	}
+	assert.True(t, auth.CanUseClientCredentials())
+
+	// 5. Opt-in true, ClientSecret set, metadata does NOT have client_credentials
+	auth.metadata = &Metadata{
+		GrantTypes: []string{"authorization_code"},
+	}
+	assert.False(t, auth.CanUseClientCredentials())
+
+	// 6. Opt-in true, ClientSecret set, manual endpoints configured (empty metadata GrantTypes)
+	authManual, err := NewAuthenticator(Config{
+		ClientID:               "client-id",
+		ClientSecret:           "secret",
+		AllowClientCredentials: true,
+		AuthorizationURL:       "https://example.com/auth",
+		TokenURL:               "https://example.com/token",
+	})
+	require.NoError(t, err)
+	// NewAuthenticator sets metadata automatically for manual endpoints
+	assert.True(t, authManual.CanUseClientCredentials())
+}
+
+func TestAuthenticator_ClientCredentialsToken_Success(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+
+		// oauth2 client credentials flow standard client authentication
+		username, password, ok := r.BasicAuth()
+		if ok {
+			assert.Equal(t, "client-id", username)
+			assert.Equal(t, "secret", password)
+		} else {
+			assert.Equal(t, "client-id", r.FormValue("client_id"))
+			assert.Equal(t, "secret", r.FormValue("client_secret"))
+		}
+
+		assert.Equal(t, "client_credentials", r.FormValue("grant_type"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"access_token": "cc-token-999", "token_type": "Bearer", "expires_in": 3600}`))
+	}))
+	defer ts.Close()
+
+	auth, err := NewAuthenticator(Config{
+		ClientID:               "client-id",
+		ClientSecret:           "secret",
+		AllowClientCredentials: true,
+		TokenURL:               ts.URL,
+		AuthorizationURL:       "http://unused",
+	})
+	require.NoError(t, err)
+
+	token, err := auth.ClientCredentialsToken(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, "cc-token-999", token.AccessToken)
+}
+
+func TestRefreshToken_ClientCredentialsFallback(t *testing.T) {
+	called := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		assert.Equal(t, "client_credentials", r.FormValue("grant_type"))
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"access_token": "cc-token-refreshed", "token_type": "Bearer", "expires_in": 3600}`))
+	}))
+	defer ts.Close()
+
+	auth, err := NewAuthenticator(Config{
+		ClientID:               "client-id",
+		ClientSecret:           "secret",
+		AllowClientCredentials: true,
+		TokenURL:               ts.URL,
+		AuthorizationURL:       "http://unused",
+	})
+	require.NoError(t, err)
+
+	expiredToken := &oauth2.Token{
+		AccessToken: "old-cc-token",
+		Expiry:      time.Now().Add(-time.Hour),
+	}
+
+	newToken, err := auth.RefreshToken(context.Background(), expiredToken)
+	assert.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, "cc-token-refreshed", newToken.AccessToken)
+}

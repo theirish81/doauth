@@ -86,6 +86,37 @@ result, _ := flow.WaitForCode(ctx)
 token, _ := auth.Exchange(ctx, result.Code, state, verifier)
 ```
 
+## Client Credentials Flow (Opt-in)
+
+If the server supports the `client_credentials` grant type, you can opt-in to use it. The library allows you to check if the server supports it, retrieve a token directly, and handle automatic refresh if needed:
+
+```go
+// 1. Initialize with AllowClientCredentials set to true
+auth, _ := doauth.NewAuthenticator(doauth.Config{
+    BaseURL:                "https://api.example.com",
+    ClientID:               "your-client-id",
+    ClientSecret:           "your-client-secret",
+    AllowClientCredentials: true,
+})
+
+// 2. Discover metadata capabilities
+_, _ = auth.Discover(ctx)
+
+// 3. Conditionally use the Client Credentials flow if available
+var token *oauth2.Token
+var err error
+if auth.CanUseClientCredentials() {
+    // Dynamic opt-in: obtain token directly without browser interaction
+    token, err = auth.ClientCredentialsToken(ctx)
+} else {
+    // Fall back to the 3-legged authorization code flow
+    authURL, state, verifier, _ := auth.GetAuthURL()
+    // Open browser, wait for callback code, and exchange
+}
+```
+
+If the token is expired and has no refresh token (as is typical for client credentials tokens), calling `auth.RefreshToken(ctx, token)` will automatically request a new token via client credentials if the capability is available.
+
 ## Manual Configuration
 
 If your environment doesn't support discovery, or you want to bypass it, you can provide endpoints manually:
@@ -129,6 +160,7 @@ url, state, verifier, _ := auth.GetAuthURL(
 - **RFC 9728**: Discovery of Protected Resource Metadata.
 - **RFC 7636**: PKCE (Proof Key for Code Exchange).
 - **RFC 6750**: Bearer Token usage via `AuthorizeRequest`.
+- **RFC 6749 Section 4.4**: Client Credentials Grant.
 
 ## License
 
