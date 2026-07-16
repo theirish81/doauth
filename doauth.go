@@ -9,6 +9,7 @@ import (
 	"net/url"
 
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
 // Config represents the configuration for the Authenticator.
@@ -25,6 +26,9 @@ type Config struct {
 	RedirectURL string
 	// Scopes is a list of requested permissions.
 	Scopes []string
+
+	// AllowClientCredentials enables client-credentials flow as an alternative to 3-legged flow.
+	AllowClientCredentials bool
 
 	// AuthorizationURL and TokenURL can be provided manually to bypass discovery.
 	AuthorizationURL string
@@ -66,8 +70,8 @@ func NewAuthenticator(cfg Config, opts ...Option) (*Authenticator, error) {
 	if cfg.ClientID == "" {
 		return nil, fmt.Errorf("ClientID is required")
 	}
-	if cfg.RedirectURL == "" {
-		return nil, fmt.Errorf("RedirectURL is required")
+	if cfg.RedirectURL == "" && !cfg.AllowClientCredentials {
+		return nil, fmt.Errorf("RedirectURL is required when client credentials are not allowed")
 	}
 
 	auth := &Authenticator{
@@ -283,10 +287,24 @@ func (a *Authenticator) AuthorizeRequest(token *oauth2.Token, req *http.Request)
 }
 
 // RefreshToken returns a fresh token, using the refresh token if the current one is expired.
+// If the token is expired and was obtained via client credentials (no refresh token),
+// it will automatically request a new one via the client credentials flow if available.
 func (a *Authenticator) RefreshToken(ctx context.Context, token *oauth2.Token) (*oauth2.Token, error) {
 	a.logger.Debug("refreshing token")
+
+	if token.Valid() {
+		a.logger.Debug("token is still valid, no refresh needed")
+		return token, nil
+	}
+
 	// Inject the custom client into the context for the oauth2 package
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, a.client)
+
+	if token.RefreshToken == "" && a.CanUseClientCredentials() {
+		a.logger.Debug("refresh token is empty but client credentials flow is available; requesting new token")
+		return a.ClientCredentialsToken(ctx)
+	}
+
 	ts := a.oauth2Cfg.TokenSource(ctx, token)
 	newToken, err := ts.Token()
 	if err != nil {
@@ -294,4 +312,60 @@ func (a *Authenticator) RefreshToken(ctx context.Context, token *oauth2.Token) (
 	}
 	a.logger.Debug("token refresh successful", "expiry", newToken.Expiry)
 	return newToken, nil
+}
+
+// CanUseClientCredentials returns true if the client credentials flow is opted-in,
+// a client secret is configured, and the server metadata lists "client_credentials" in
+// its supported grant types (or endpoints are manually configured).
+func (a *Authenticator) CanUseClientCredentials() bool {
+	if !a.cfg.AllowClientCredentials {
+		return false
+	}
+	if a.cfg.ClientSecret == "" {
+		return false
+	}
+	if a.metadata == nil {
+		return false
+	}
+	if len(a.metadata.GrantTypes) > 0 {
+		for _, gt := range a.metadata.GrantTypes {
+			if gt == "client_credentials" {
+				return true
+			}
+		}
+		return false
+	}
+	// If metadata doesn't specify grant types, and manual endpoints are used, assume true.
+	if a.cfg.AuthorizationURL != "" && a.cfg.TokenURL != "" {
+		return true
+	}
+	return false
+}
+
+// ClientCredentialsToken retrieves a token using the client credentials grant flow.
+func (a *Authenticator) ClientCredentialsToken(ctx context.Context) (*oauth2.Token, error) {
+	if a.oauth2Cfg.Endpoint.TokenURL == "" {
+		return nil, fmt.Errorf("token endpoint missing; call Discover() first")
+	}
+	if a.cfg.ClientSecret == "" {
+		return nil, fmt.Errorf("ClientSecret is required for client credentials flow")
+	}
+
+	ccCfg := &clientcredentials.Config{
+		ClientID:     a.cfg.ClientID,
+		ClientSecret: a.cfg.ClientSecret,
+		TokenURL:     a.oauth2Cfg.Endpoint.TokenURL,
+		Scopes:       a.oauth2Cfg.Scopes,
+	}
+
+	// Inject the custom client into the context for the oauth2 package
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, a.client)
+
+	a.logger.Debug("requesting token via client credentials flow")
+	token, err := ccCfg.Token(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("client credentials token request failed: %w", err)
+	}
+	a.logger.Debug("client credentials token request successful", "expiry", token.Expiry)
+	return token, nil
 }
