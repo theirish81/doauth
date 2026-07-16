@@ -15,7 +15,7 @@
 ## Installation
 
 ```bash
-go get github.com/diaphora/doauth
+go get github.com/theirish81/doauth
 ```
 
 ## Quick Start (Standard Discovery)
@@ -26,7 +26,7 @@ package main
 import (
     "context"
     "fmt"
-    "github.com/diaphora/doauth"
+    "github.com/theirish81/doauth"
 )
 
 func main() {
