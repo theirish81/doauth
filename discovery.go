@@ -136,6 +136,7 @@ func (a *Authenticator) getWellKnownURLs(baseURL string) []string {
 	var urls []string
 	if path != "" {
 		// RFC 8414/9728 style
+		urls = append(urls, host+PathOpenIDConfig+path)
 		urls = append(urls, host+PathOAuthAuthServer+path)
 		urls = append(urls, host+PathOAuthProtectedRoute+path)
 	}
