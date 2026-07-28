@@ -145,6 +145,10 @@ func (a *Authenticator) getWellKnownURLs(baseURL string) []string {
 	urls = append(urls, baseURL+PathOAuthAuthServer)
 	urls = append(urls, baseURL+PathOAuthProtectedRoute)
 
+	// Not standard but often used
+	urls = append(urls, host+PathOpenIDConfig)
+	urls = append(urls, host+PathOAuthAuthServer)
+	urls = append(urls, host+PathOAuthProtectedRoute)
 	return urls
 }
 
